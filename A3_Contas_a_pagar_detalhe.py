@@ -39,6 +39,16 @@ result = sheets_service.spreadsheets().values().get(
     range=sheet_range
 ).execute()
 values = result.get('values', [])
+
+if not values:
+    raise ValueError("Planilha vazia ou não encontrada")
+
+# = Corrigir linhas com menos colunas que o cabeçalho =
+max_len = len(values[0])
+for i in range(1, len(values)):
+    while len(values[i]) < max_len:
+        values[i].append("")
+
 df_base = pd.DataFrame(values[1:], columns=values[0])
 
 ids = df_base["financialEvent.id"].dropna().unique()
@@ -55,27 +65,18 @@ def extract_fields(item):
     resultado = []
     base_id = item.get("id")
     
-    # Obter observation com tratamento para None
     observation = item.get("observation", "") or ""
-    
-    # Verificar se existem attachments
     attachments = item.get("attachments", [])
     tem_attachments_api = "Sim" if attachments and len(attachments) > 0 else "Não"
     
-    # **CONDICIONAL**: Se observation contiver "desconsiderar anexo", definir como "Sim"
-    if observation and "desconsiderar anexo" in observation.lower():
+    if "desconsiderar anexo" in observation.lower():
         tem_attachments = "Sim"
     else:
         tem_attachments = tem_attachments_api
     
     categories = item.get("categoriesRatio", [])
     for cat in categories:
-        linha = {"id": base_id}
-        
-        # Adicionar as informações sobre attachments e observation em cada linha
-        linha["tem_attachments"] = tem_attachments
-        linha["observation"] = observation
-        
+        linha = {"id": base_id, "tem_attachments": tem_attachments, "observation": observation}
         for k, v in cat.items():
             if k == "costCentersRatio":
                 for i, centro in enumerate(v):
@@ -85,7 +86,6 @@ def extract_fields(item):
                 linha[f"categoriesRatio.{k}"] = v
         resultado.append(linha)
     
-    # Se não houver categoriesRatio, ainda assim criar uma linha com o ID, status dos attachments e observation
     if not categories:
         linha = {"id": base_id, "tem_attachments": tem_attachments, "observation": observation}
         resultado.append(linha)
@@ -122,12 +122,11 @@ df_detalhes = pd.DataFrame(todos_detalhes)
 
 # Reorganizar as colunas para colocar 'observation' e 'tem_attachments' no final
 colunas_especiais = ['tem_attachments', 'observation']
-if any(col in df_detalhes.columns for col in colunas_especiais):
-    colunas = [col for col in df_detalhes.columns if col not in colunas_especiais]
-    for col in colunas_especiais:
-        if col in df_detalhes.columns:
-            colunas.append(col)
-    df_detalhes = df_detalhes[colunas]
+colunas = [col for col in df_detalhes.columns if col not in colunas_especiais]
+for col in colunas_especiais:
+    if col in df_detalhes.columns:
+        colunas.append(col)
+df_detalhes = df_detalhes[colunas]
 
 # Limpar conteúdo anterior da planilha
 sheets_service.spreadsheets().values().clear(
@@ -135,7 +134,7 @@ sheets_service.spreadsheets().values().clear(
     range="A:Z"
 ).execute()
 
-# Enviar cabeçalho primeiro
+# Enviar cabeçalho
 headers_data = [df_detalhes.columns.tolist()]
 sheets_service.spreadsheets().values().update(
     spreadsheetId=output_sheet_id,
@@ -151,7 +150,7 @@ data_values = df_detalhes.fillna("").astype(str).values.tolist()
 
 for i in range(0, len(data_values), batch_size):
     batch_data = data_values[i:i + batch_size]
-    start_row = i + 2  # +2 porque linha 1 é o cabeçalho
+    start_row = i + 2
     
     try:
         sheets_service.spreadsheets().values().update(
@@ -163,7 +162,7 @@ for i in range(0, len(data_values), batch_size):
         print(f"📊 Lote {i//batch_size + 1} enviado: linhas {start_row} a {start_row + len(batch_data) - 1}")
     except Exception as e:
         print(f"❌ Erro ao enviar lote {i//batch_size + 1}: {e}")
-        # Tentar novamente com lote menor
+        # Tentar mini-lotes
         mini_batch_size = 500
         for j in range(0, len(batch_data), mini_batch_size):
             mini_batch = batch_data[j:j + mini_batch_size]
