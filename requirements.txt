@@ -1,0 +1,13 @@
+requests
+psycopg2-binary
+python-dateutil
+pandas
+sqlalchemy
+pydrive2
+openai
+streamlit
+langchain
+langchain-experimental
+tabulate
+gspread
+gspread-dataframe
