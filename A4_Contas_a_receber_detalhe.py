@@ -50,7 +50,7 @@ print(f"📥 Planilha carregada com {len(ids)} IDs únicos.")
 
 # = Configuração da API Conta Azul =
 headers = {
-    'X-Authorization': 'ba461980-c757-46d2-a70f-5ab6b2dcdb29',
+    'X-Authorization': 'ed702bf5-4807-4266-b187-02dd7a7a8705',
     'User-Agent': 'Mozilla/5.0'
 }
 
