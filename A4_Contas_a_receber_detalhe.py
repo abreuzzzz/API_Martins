@@ -33,7 +33,7 @@ def get_file_id(name):
 input_sheet_id = get_file_id(sheet_input_name)
 output_sheet_id = get_file_id(sheet_output_name)
 
-# ===================== Leitura do Google Sheets diretamente para o Pandas =====================
+# ===================== Leitura do Google Sheets =====================
 sheet_range = "A:Z"
 result = sheets_service.spreadsheets().values().get(
     spreadsheetId=input_sheet_id,
@@ -49,7 +49,6 @@ num_cols = len(values[0])
 values_fixed = [row + [""]*(num_cols - len(row)) if len(row) < num_cols else row for row in values[1:]]
 
 df_base = pd.DataFrame(values_fixed, columns=values[0])
-
 ids = df_base["financialEvent.id"].dropna().unique()
 print(f"📥 Planilha carregada com {len(ids)} IDs únicos.")
 
@@ -59,14 +58,20 @@ headers = {
     'User-Agent': 'Mozilla/5.0'
 }
 
-# ===================== Função para extrair todos os campos aninhados =====================
+# ===================== Função para extrair campos aninhados =====================
 def extract_fields(item):
     resultado = []
-    base_id = item.get("id")
-    categories = item.get("categoriesRatio", [])
+    base_id = item.get("id") or ""
+    observation = item.get("observation", "") or ""
+    attachments = item.get("attachments", [])
+    tem_attachments = "Sim" if attachments and len(attachments) > 0 else "Não"
 
+    if "desconsiderar anexo" in observation.lower():
+        tem_attachments = "Sim"
+
+    categories = item.get("categoriesRatio", [])
     for cat in categories:
-        linha = {"id": base_id}
+        linha = {"id": base_id, "tem_attachments": tem_attachments, "observation": observation}
         for k, v in cat.items():
             if k == "costCentersRatio":
                 for i, centro in enumerate(v):
@@ -77,8 +82,8 @@ def extract_fields(item):
         resultado.append(linha)
 
     if not categories:
-        # Se não houver categoriesRatio, ainda gerar linha mínima com ID
-        resultado.append({"id": base_id})
+        # Garantir linha mínima mesmo sem categoriesRatio
+        resultado.append({"id": base_id, "tem_attachments": tem_attachments, "observation": observation})
 
     return resultado
 
@@ -112,11 +117,22 @@ print(f"✅ Coleta finalizada com {len(todos_detalhes)} registros.")
 if ids_falhos:
     print(f"⚠️ IDs com falha na coleta: {ids_falhos}")
 
-# ===================== Transformar em DataFrame e corrigir colunas inconsistentes =====================
-df_detalhes = pd.DataFrame(todos_detalhes)
+# ===================== Transformar em DataFrame com cabeçalhos fixos =====================
+cabecalhos = [
+    "id",
+    "categoriesRatio.negative",
+    "categoriesRatio.grossValue",
+    "categoriesRatio.operationType",
+    "categoriesRatio.type",
+    "categoriesRatio.category",
+    "categoriesRatio.value",
+    "categoriesRatio.categoryId",
+    "tem_attachments",
+    "observation"
+]
 
-# Garantir que todas as linhas tenham colunas consistentes
-df_detalhes = df_detalhes.reindex(columns=df_detalhes.columns.tolist())
+df_detalhes = pd.DataFrame(todos_detalhes)
+df_detalhes = df_detalhes.reindex(columns=cabecalhos, fill_value="")
 
 # ===================== Limpar conteúdo anterior da planilha =====================
 sheets_service.spreadsheets().values().clear(
@@ -142,7 +158,6 @@ for i in range(0, len(data_values)-1, batch_size):
         print(f"📊 Lote {i//batch_size + 1} enviado: linhas {start_row} a {start_row + len(batch_data) - 1}")
     except Exception as e:
         print(f"❌ Erro ao enviar lote {i//batch_size + 1}: {e}")
-        # Tentar mini-lotes em caso de falha
         mini_batch_size = 500
         for j in range(0, len(batch_data), mini_batch_size):
             mini_batch = batch_data[j:j + mini_batch_size]
