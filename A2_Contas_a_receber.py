@@ -2,6 +2,7 @@ import os
 import json
 import pandas as pd
 import requests
+from io import BytesIO
 from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -14,119 +15,159 @@ credentials = service_account.Credentials.from_service_account_info(credentials_
 drive_service = build("drive", "v3", credentials=credentials)
 sheets_service = build("sheets", "v4", credentials=credentials)
 
-# ===================== Headers da API Conta Azul =====================
+# ===================== Configurações =====================
+export_url = "https://services.contaazul.com/finance-pro-reports/api/v1/installment-view/export"
 headers = {
-    'X-Authorization': 'ed702bf5-4807-4266-b187-02dd7a7a8705',
+    'x-authorization': 'ed702bf5-4807-4266-b187-02dd7a7a8705',
     'Content-Type': 'application/json',
     'User-Agent': 'Mozilla/5.0'
 }
 
-# ===================== Colunas a serem extraídas =====================
-colunas_base = [
-    "id",
-    "description",
-    "dueDate",
-    "expectedPaymentDate",
-    "lastAcquittanceDate",
-    "unpaid",
-    "paid",
-    "status",
-    "financialEvent.id",
-    "financialEvent.competenceDate",
-    "financialEvent.categoryDescriptions",
-    "financialEvent.negotiator.id",
-    "financialEvent.negotiator.name"
-]
+# Lista de status para processar
+status_list = ["ACQUITTED", "PARTIAL", "PENDING", "LOST"]
 
-# ===================== Função para gerar períodos de 15 dias =====================
-def gerar_periodos(data_inicio, data_fim):
-    """Gera lista de períodos de 15 dias entre data_inicio e data_fim"""
-    periodos = []
-    current_date = data_inicio
-    
-    while current_date <= data_fim:
-        periodo_fim = min(current_date + timedelta(days=14), data_fim)
-        periodos.append({
-            'dueDateFrom': current_date.strftime('%Y-%m-%d'),
-            'dueDateTo': periodo_fim.strftime('%Y-%m-%d')
-        })
-        current_date = periodo_fim + timedelta(days=1)
-    
-    return periodos
+# ===================== Baixar e consolidar arquivos XLSX =====================
+print("🔄 Iniciando download dos arquivos XLSX para cada status...")
 
-# ===================== Função para coletar dados de um período =====================
-def coletar_dados_periodo(periodo, max_pages=20):
-    """Coleta dados paginados para um período específico"""
-    page = 1
-    page_size = 100
-    items_periodo = []
-    
-    while page <= max_pages:
-        url = f"https://services.contaazul.com/finance-pro-reader/v1/installment-view?page={page}&page_size={page_size}"
-        payload = json.dumps({
-            "dueDateFrom": periodo['dueDateFrom'],
-            "dueDateTo": periodo['dueDateTo'],
-            "quickFilter": "ALL",
-            "search": "",
-            "type": "REVENUE"
-        })
-        
-        try:
-            response = requests.post(url, headers=headers, data=payload)
-            response.raise_for_status()
-            data = response.json()
-            items = data.get("items", [])
-            
-            if not items:
-                break
-            
-            items_periodo.extend(items)
-            page += 1
-            
-            print(f"  📄 Página {page-1}: {len(items)} registros coletados ({periodo['dueDateFrom']} a {periodo['dueDateTo']})")
-            
-        except requests.exceptions.RequestException as e:
-            print(f"  ⚠️ Erro na página {page} do período {periodo['dueDateFrom']} a {periodo['dueDateTo']}: {e}")
-            break
-    
-    return items_periodo
+all_dataframes = []
 
-# ===================== Coleta paginada da API por períodos =====================
-data_inicio = datetime(2015, 1, 1)
-data_fim = datetime(2030, 12, 31)
+for status_atual in status_list:
+    print(f"\n📥 Baixando dados para status: {status_atual}")
 
-print(f"🔄 Gerando períodos de 15 dias entre {data_inicio.date()} e {data_fim.date()}...")
-periodos = gerar_periodos(data_inicio, data_fim)
-print(f"📊 Total de períodos a processar: {len(periodos)}")
+    payload = json.dumps({
+        "dueDateFrom": None,
+        "dueDateTo": None,
+        "quickFilter": "ALL",
+        "search": "",
+        "status": [status_atual],
+        "type": "REVENUE"
+    })
 
-all_items = []
-total_periodos = len(periodos)
+    try:
+        response = requests.post(export_url, headers=headers, data=payload)
+        response.raise_for_status()
 
-for idx, periodo in enumerate(periodos, 1):
-    print(f"\n🔍 Processando período {idx}/{total_periodos}: {periodo['dueDateFrom']} a {periodo['dueDateTo']}")
-    items_periodo = coletar_dados_periodo(periodo)
-    all_items.extend(items_periodo)
-    print(f"  ✅ Total acumulado: {len(all_items)} registros")
+        # Ler o arquivo XLSX da resposta
+        xlsx_content = BytesIO(response.content)
+        df = pd.read_excel(xlsx_content)
 
-print(f"\n✅ Coleta finalizada! Total de registros: {len(all_items)}")
+        # Adicionar coluna de status
+        df['status'] = status_atual
 
-# ===================== Normalização dos dados =====================
-def extract_fields(item, campos):
-    flat_item = {}
-    for campo in campos:
-        partes = campo.split('.')
-        valor = item
-        for parte in partes:
-            valor = valor.get(parte, {}) if isinstance(valor, dict) else {}
-        flat_item[campo] = valor if valor != {} else None
-    return flat_item
+        print(f"  ✅ {len(df)} registros baixados para {status_atual}")
 
-dados_formatados = [extract_fields(item, colunas_base) for item in all_items]
-df = pd.DataFrame(dados_formatados)
+        all_dataframes.append(df)
 
-# Remover duplicatas baseadas no ID
-df = df.drop_duplicates(subset=['id'], keep='first')
-print(f"📋 Total de registros únicos após remoção de duplicatas: {len(df)}")
+    except requests.exceptions.RequestException as e:
+        print(f"  ⚠️ Erro ao baixar dados para {status_atual}: {e}")
+        continue
+    except Exception as e:
+        print(f"  ⚠️ Erro ao processar arquivo XLSX para {status_atual}: {e}")
+        continue
+
+# ===================== Consolidar todos os DataFrames =====================
+if not all_dataframes:
+    raise Exception("❌ Nenhum dado foi baixado com sucesso!")
+
+print(f"\n🔄 Consolidando {len(all_dataframes)} arquivos...")
+df_consolidado = pd.concat(all_dataframes, ignore_index=True)
+
+# Remover duplicatas baseadas no ID (se existir coluna 'id')
+if 'id' in df_consolidado.columns:
+    df_consolidado = df_consolidado.drop_duplicates(subset=['id'], keep='first')
+    print(f"📋 Total de registros únicos após remoção de duplicatas: {len(df_consolidado)}")
+else:
+    print(f"📋 Total de registros consolidados: {len(df_consolidado)}")
+
+# ===================== Atualizar status PENDING para OVERDUE =====================
+print(f"\n🔄 Verificando status PENDING com data vencida...")
+
+# Calcular data de ontem
+ontem = datetime.now() - timedelta(days=1)
+ontem = ontem.replace(hour=0, minute=0, second=0, microsecond=0)
+
+# Nome da coluna de data de vencimento (ajuste se necessário)
+col_vencimento = "Data de vencimento"
+
+if col_vencimento in df_consolidado.columns:
+    # Converter coluna de vencimento para datetime
+    df_consolidado[col_vencimento] = pd.to_datetime(df_consolidado[col_vencimento], format='%d/%m/%Y', errors='coerce', dayfirst=True)
+
+    # Contar quantos serão atualizados
+    mask_update = (df_consolidado['status'] == 'PENDING') & (df_consolidado[col_vencimento] <= ontem)
+    total_atualizados = mask_update.sum()
+
+    # Atualizar status
+    df_consolidado.loc[mask_update, 'status'] = 'OVERDUE'
+
+    print(f"  ✅ {total_atualizados} registros PENDING atualizados para OVERDUE")
+else:
+    print(f"  ⚠️ AVISO: Coluna '{col_vencimento}' não encontrada!")
+    print(f"  Colunas disponíveis: {df_consolidado.columns.tolist()}")
+
+# ===================== Criar nova coluna com valor calculado =====================
+print(f"\n🔄 Criando coluna 'Valor Calculado'...")
+
+# Nomes das colunas para contas a receber
+col_recebido = "Valor total recebido da parcela (R$)"
+col_aberto = "Valor da parcela em aberto (R$)"
+
+# Garantir que as colunas existam
+if col_recebido not in df_consolidado.columns or col_aberto not in df_consolidado.columns:
+    print(f"  ⚠️ AVISO: Colunas esperadas não encontradas!")
+    print(f"  Colunas disponíveis: {df_consolidado.columns.tolist()}")
+else:
+    # Criar a nova coluna baseada nas condições
+    def calcular_valor(row):
+        if row['status'] == 'ACQUITTED':
+            # Se ACQUITTED, considerar apenas valor recebido
+            return row[col_recebido]
+        elif row['status'] == 'PARTIAL':
+            # Se PARTIAL, somar valor recebido + valor em aberto
+            return row[col_recebido] + row[col_aberto]
+        else:
+            # Para outros status (PENDING, OVERDUE, LOST), considerar valor em aberto
+            return row[col_aberto]
+
+    df_consolidado['Valor Calculado'] = df_consolidado.apply(calcular_valor, axis=1)
+    print(f"  ✅ Coluna 'Valor Calculado' criada com sucesso!")
+
+# ===================== Converter colunas datetime para string =====================
+print(f"\n🔄 Convertendo colunas de data para string...")
+
+# Identificar colunas de tipo datetime
+datetime_columns = df_consolidado.select_dtypes(include=['datetime64']).columns.tolist()
+
+# Converter cada coluna datetime para string no formato desejado
+for col in datetime_columns:
+    df_consolidado[col] = df_consolidado[col].dt.strftime('%d/%m/%Y')
+    print(f"  ✅ Coluna '{col}' convertida para string")
+
+# ===================== Renomear colunas conforme especificação =====================
+print(f"\n🔄 Renomeando colunas...")
+
+# Dicionário de mapeamento: nome_antigo -> nome_novo
+colunas_renomear = {
+    "Data de vencimento": "dueDate",
+    "Data de competência": "financialEvent.competenceDate",
+    "Valor Calculado": "paid",
+    "Centro de Custo 1": "categoriesRatio.costCentersRatio.0.costCenter",
+    "Categoria 1": "categoriesRatio.category",
+    "Descrição": "description",
+    "Nome do cliente": "financialEvent.negotiator.name",
+    "Data do último pagamento": "lastAcquittanceDate"
+}
+
+# Renomear apenas as colunas que existem no DataFrame
+colunas_renomeadas = {}
+for col_antiga, col_nova in colunas_renomear.items():
+    if col_antiga in df_consolidado.columns:
+        colunas_renomeadas[col_antiga] = col_nova
+        print(f"  ✅ '{col_antiga}' → '{col_nova}'")
+    else:
+        print(f"  ⚠️ Coluna '{col_antiga}' não encontrada")
+
+df_consolidado.rename(columns=colunas_renomeadas, inplace=True)
 
 # ===================== Buscar ID da planilha no Google Drive =====================
 folder_id = "1NmHSga-UCUycinn2RMKviwM1XX_Mr5AR"
@@ -145,18 +186,23 @@ spreadsheet_id = files[0]['id']
 print(f"\n🧹 Limpando planilha '{sheet_name}'...")
 sheets_service.spreadsheets().values().clear(
     spreadsheetId=spreadsheet_id,
-    range="A:Z"
+    range="A:BA"
 ).execute()
 
 # ===================== Atualizar dados na planilha =====================
-print(f"📤 Atualizando planilha com {len(df)} registros...")
-values = [df.columns.tolist()] + df.fillna("").values.tolist()
+print(f"📤 Atualizando planilha com {len(df_consolidado)} registros...")
+values = [df_consolidado.columns.tolist()] + df_consolidado.fillna("").values.tolist()
 sheets_service.spreadsheets().values().update(
     spreadsheetId=spreadsheet_id,
     range="A1",
-    valueInputOption="RAW",
+    valueInputOption="USER_ENTERED",
     body={"values": values}
 ).execute()
 
 print(f"\n✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
-print(f"📊 Total de registros: {len(df)}")
+print(f"📊 Total de registros: {len(df_consolidado)}")
+print(f"📊 Registros por status (após ajustes):")
+for status in status_list + ['OVERDUE']:
+    count = len(df_consolidado[df_consolidado['status'] == status])
+    if count > 0:
+        print(f"  - {status}: {count} registros")
