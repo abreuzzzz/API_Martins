@@ -2,7 +2,11 @@ name: Atualizar Conta Azul
 
 on:
   schedule:
-    - cron: '0 22 * * *'  # todos os dias às 03:00 UTC
+    - cron: '0 9 * * *'   # 06:00 BRT (09:00 UTC)
+    - cron: '0 15 * * *'  # 12:00 BRT (15:00 UTC)
+    - cron: '0 19 * * *'  # 16:00 BRT (19:00 UTC)
+    - cron: '0 22 * * *'  # 19:00 BRT (22:00 UTC)
+
   workflow_dispatch:
 
 jobs:
