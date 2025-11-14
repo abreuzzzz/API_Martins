@@ -30,9 +30,7 @@ def limpar_valores(col):
            .pipe(pd.to_numeric, errors="coerce")
     )
 
-df['unpaid'] = limpar_valores(df['unpaid'])
 df['paid'] = limpar_valores(df['paid'])
-df['categoriesRatio.value'] = limpar_valores(df['categoriesRatio.value'])
 
 # Converter coluna de data
 # Conversão de datas com parsing manual para evitar problemas de formatação
@@ -57,23 +55,23 @@ df['Trimestre'] = df['lastAcquittanceDate'].dt.to_period('Q')
 df['AnoMes_Caixa'] = df['lastAcquittanceDate'].dt.to_period('M')
 df['Trimestre_Caixa'] = df['lastAcquittanceDate'].dt.to_period('Q')
 
-# Resumo trimestral: valores pagos e pendentes por tipo
-resumo_trimestral = df.groupby(['Trimestre', 'tipo'])[['categoriesRatio.value', 'unpaid']].sum().unstack(fill_value=0)
+# Resumo trimestral: valores pagos
+resumo_trimestral = df.groupby(['Trimestre', 'tipo'])[['paid']].sum().unstack(fill_value=0)
 
 # Variação mensal por categoria
-resumo_mensal_categoria = df.groupby(['AnoMes', 'categoriesRatio.category'])['categoriesRatio.value'].sum().unstack(fill_value=0)
+resumo_mensal_categoria = df.groupby(['AnoMes', 'categoriesRatio.category'])['paid'].sum().unstack(fill_value=0)
 variacao_mensal_pct = resumo_mensal_categoria.pct_change().fillna(0)
 categorias_com_alta = (variacao_mensal_pct > 0.3).apply(lambda row: row[row > 0.3].to_dict(), axis=1).to_dict()
 
 # Valores totais
-total_recebido = df[df['tipo'] == 'Receita']['categoriesRatio.value'].sum()
-total_pago = df[df['tipo'] == 'Despesa']['categoriesRatio.value'].sum()
+total_recebido = df[df['tipo'] == 'Receita']['paid'].sum()
+total_pago = df[df['tipo'] == 'Despesa']['paid'].sum()
 total_pendente_despesa = df[
     (df['tipo'] == 'Despesa') & (df['status'] == 'OVERDUE')
-]['categoriesRatio.value'].sum()
+]['paid'].sum()
 total_pendente_receita = df[
     (df['tipo'] == 'Receita') & (df['status'] == 'OVERDUE')
-]['categoriesRatio.value'].sum()
+]['paid'].sum()
 saldo_liquido = total_recebido - total_pago
 top_categorias = df['categoriesRatio.category'].value_counts().head(3).to_dict()
 
@@ -84,7 +82,7 @@ hoje = pd.to_datetime(datetime.today().date())
 df_realizadas = df[df['lastAcquittanceDate'] <= hoje].copy()
 
 df_realizadas['valor_ajustado'] = df_realizadas.apply(
-    lambda row: abs(row['categoriesRatio.value']) if row['tipo'] == 'Receita' else -abs(row['categoriesRatio.value']),
+    lambda row: abs(row['paid']) if row['tipo'] == 'Receita' else -abs(row['paid']),
     axis=1
 )
 
@@ -96,8 +94,8 @@ fluxo_caixa['saldo_acumulado'] = fluxo_caixa['valor_ajustado'].cumsum()
 df_receitas = df_realizadas[df_realizadas['tipo'].str.lower() == 'Receita']
 df_despesas = df_realizadas[df_realizadas['tipo'].str.lower() == 'Despesa']
 
-receitas_mensais = df_receitas.groupby('AnoMes')['categoriesRatio.value'].sum().reset_index()
-despesas_mensais = df_despesas.groupby('AnoMes')['categoriesRatio.value'].sum().reset_index()
+receitas_mensais = df_receitas.groupby('AnoMes')['paid'].sum().reset_index()
+despesas_mensais = df_despesas.groupby('AnoMes')['paid'].sum().reset_index()
 
 # Rentabilidade
 rentabilidade = pd.merge(
@@ -108,15 +106,14 @@ rentabilidade = pd.merge(
     suffixes=('_receita', '_despesa')
 ).fillna(0)
 
-rentabilidade['lucro'] = rentabilidade['categoriesRatio.value_receita'] - rentabilidade['categoriesRatio.value_despesa']
-rentabilidade['margem_lucro'] = rentabilidade['lucro'] / rentabilidade['categoriesRatio.value_receita'].replace(0, pd.NA)
+rentabilidade['lucro'] = rentabilidade['paid_receita'] - rentabilidade['paid_despesa']
+rentabilidade['margem_lucro'] = rentabilidade['lucro'] / rentabilidade['paid_receita'].replace(0, pd.NA)
 
 # Pendências e vencidos
-df_pendentes = df[(df['unpaid'] > 0) & (df['dueDate'] <= hoje) & (df['status'] == 'OVERDUE')]
-pendentes_por_tipo = df_pendentes.groupby('tipo')['unpaid'].sum().to_dict()
+df_pendentes = df[(df['paid'] > 0) & (df['dueDate'] <= hoje) & (df['status'] == 'OVERDUE')]
 
 # Inadimplência
-total_vencido = df_pendentes[df_pendentes['tipo'] == 'Receita']['categoriesRatio.value'].sum()
+total_vencido = df_pendentes[df_pendentes['tipo'] == 'Receita']['paid'].sum()
 inadimplencia = total_vencido / total_recebido if total_recebido else 0
 
 # Prompt detalhado
@@ -144,12 +141,9 @@ Você é um analista financeiro sênior. Recebi um extrato financeiro com as seg
 6. Rentabilidade mensal (lucro e margem de lucro):
 {rentabilidade[['AnoMes', 'lucro', 'margem_lucro']].to_string(index=False)}
 
-7. Pendências vencidas por tipo:
-{pendentes_por_tipo}
+7. Inadimplência (proporção de valores vencidos sobre receitas realizadas): {inadimplencia:.2%}
 
-8. Inadimplência (proporção de valores vencidos sobre receitas realizadas): {inadimplencia:.2%}
-
-9. faça um resumo executivo.
+8. faça um resumo executivo.
 
 Por favor, me forneça:
 - Insights sobre a saúde financeira e tendências.
