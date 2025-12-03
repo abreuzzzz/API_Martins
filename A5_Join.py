@@ -171,24 +171,6 @@ colunas_valor = [col for col in df_completo.columns if col.startswith("Valor no 
 print(f"  Encontradas {len(colunas_centro_custo)} colunas de centro de custo")
 print(f"  Encontradas {len(colunas_valor)} colunas de valor")
 
-# Verifica se não existem as colunas de Centro de Custo
-if len(colunas_centro_custo) == 0:
-    print("  ⚠️ Colunas de Centro de Custo não encontradas")
-    print("  ✅ Criando 'Centro de Custo 1' e 'Valor no Centro de Custo 1' automaticamente...")
-    
-    # Cria as colunas faltantes
-    df_completo['Centro de Custo 1'] = 'Sem Centro de Custo'
-    df_completo['Valor no Centro de Custo 1'] = df_completo['paid'].fillna(0)
-    
-    # Atualiza as listas de colunas
-    colunas_centro_custo = ['Centro de Custo 1']
-    colunas_valor = ['Valor no Centro de Custo 1']
-    
-    print(f"  ✅ Colunas criadas com sucesso!")
-    print(f"    - Centro de Custo 1: {len(df_completo)} registros preenchidos")
-    print(f"    - Valor no Centro de Custo 1: copiado de 'paid'")
-
-# Agora prossegue com a pivotagem (o código existente continua aqui)
 if len(colunas_centro_custo) > 0 and len(colunas_valor) > 0:
     # Cria lista com todas as outras colunas que não são centro de custo
     colunas_id = [col for col in df_completo.columns if col not in colunas_centro_custo + colunas_valor]
@@ -258,8 +240,7 @@ if len(colunas_centro_custo) > 0 and len(colunas_valor) > 0:
     set_with_dataframe(aba_pivotada, df_final)
     print("✅ Planilha pivotada criada/atualizada com sucesso!")
     print(f"📋 Total de colunas na planilha pivotada: {len(df_final.columns)}")
-    print(f"📊 Total de registros na planilha pivotada: {len(df_final)}")
 else:
-    print("⚠️ Erro inesperado: Colunas não foram criadas corretamente")
+    print("⚠️ Nenhuma coluna de centro de custo encontrada para pivotagem")
 
 print("\n🎉 Processamento concluído com sucesso!")
