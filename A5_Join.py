@@ -216,6 +216,7 @@ if len(colunas_centro_custo) > 0 and len(colunas_valor) > 0:
     
     # Converte valores negativos em positivos
     if 'paid_new' in df_final.columns:
+        df_final['paid_new'] = pd.to_numeric(df_final['paid_new'], errors='coerce')
         df_final['paid_new'] = df_final['paid_new'].abs()
         print("  ✅ Valores negativos convertidos para positivos")
 
