@@ -16,7 +16,7 @@ drive_service = build("drive", "v3", credentials=credentials)
 sheets_service = build("sheets", "v4", credentials=credentials)
 
 # ===================== Configurações =====================
-export_url = "https://services.contaazul.com/finance-pro-reports/api/v1/installment-view/export"
+export_url = "https://services.contaazul.com/finance-pro-reports/v1/financial-statement-view/export"
 headers = {
     'x-authorization': 'ed702bf5-4807-4266-b187-02dd7a7a8705',
     'Content-Type': 'application/json',
@@ -24,7 +24,7 @@ headers = {
 }
 
 # Lista de status para processar
-status_list = ["ACQUITTED", "PARTIAL", "PENDING", "LOST"]
+status_list = ["ACQUITTED", "PARTIAL", "PENDING", "LOST", "RENEGOTIATED", "CONCILIATED"]
 
 # ===================== Baixar e consolidar arquivos XLSX =====================
 print("🔄 Iniciando download dos arquivos XLSX para cada status...")
@@ -35,12 +35,12 @@ for status_atual in status_list:
     print(f"\n📥 Baixando dados para status: {status_atual}")
 
     payload = json.dumps({
-        "dueDateFrom": None,
-        "dueDateTo": None,
+        "dateFrom": None,
+        "dateTo": None,
         "quickFilter": "ALL",
         "search": "",
         "status": [status_atual],
-        "type": "EXPENSE"
+        "type": ["EXPENSE"]
     })
 
     try:
@@ -74,13 +74,36 @@ if 'id' in df_consolidado.columns:
 else:
     print(f"📋 Total de registros consolidados: {len(df_consolidado)}")
 
+# ===================== MAPEAR CONCILIATED PARA ACQUITTED =====================
+print(f"\n🔄 Mapeando status CONCILIATED para ACQUITTED...")
+mask_conciliated = df_consolidado['status'] == 'CONCILIATED'
+total_conciliated = mask_conciliated.sum()
+df_consolidado.loc[mask_conciliated, 'status'] = 'ACQUITTED'
+print(f"  ✅ {total_conciliated} registros CONCILIATED convertidos para ACQUITTED")
+
+# ===================== Criar coluna "Data do último pagamento" =====================
+print(f"\n🔄 Criando coluna 'Data do último pagamento' baseada em Situação e Data movimento...")
+
+if 'Situação' in df_consolidado.columns and 'Data movimento' in df_consolidado.columns:
+    # Criar a nova coluna
+    df_consolidado['Data do último pagamento'] = None
+    
+    # Aplicar a regra: se Situação é "Quitado" ou "Conciliado", usar "Data movimento"
+    mask = df_consolidado['Situação'].isin(['Quitado', 'Conciliado'])
+    df_consolidado.loc[mask, 'Data do último pagamento'] = df_consolidado.loc[mask, 'Data movimento']
+    
+    registros_preenchidos = mask.sum()
+    print(f"  ✅ Coluna 'Data do último pagamento' criada com {registros_preenchidos} registros preenchidos")
+else:
+    print(f"  ⚠️ AVISO: Colunas 'Situação' e/ou 'Data movimento' não encontradas!")
+
 # ===================== Atualizar status PENDING para OVERDUE =====================
 print(f"\n🔄 Verificando status PENDING com data vencida...")
 
 ontem = datetime.now() - timedelta(days=1)
 ontem = ontem.replace(hour=0, minute=0, second=0, microsecond=0)
 
-col_vencimento = "Data de vencimento"
+col_vencimento = "Data do último pagamento"
 
 if col_vencimento in df_consolidado.columns:
     df_consolidado[col_vencimento] = pd.to_datetime(df_consolidado[col_vencimento], format='%d/%m/%Y', errors='coerce', dayfirst=True)
@@ -90,26 +113,6 @@ if col_vencimento in df_consolidado.columns:
     print(f"  ✅ {total_atualizados} registros PENDING atualizados para OVERDUE")
 else:
     print(f"  ⚠️ AVISO: Coluna '{col_vencimento}' não encontrada!")
-
-# ===================== Criar nova coluna com valor calculado =====================
-print(f"\n🔄 Criando coluna 'Valor Calculado'...")
-
-col_pago = "Valor total pago da parcela (R$)"
-col_aberto = "Valor da parcela em aberto (R$)"
-
-if col_pago not in df_consolidado.columns or col_aberto not in df_consolidado.columns:
-    print(f"  ⚠️ AVISO: Colunas esperadas não encontradas!")
-else:
-    def calcular_valor(row):
-        if row['status'] == 'ACQUITTED':
-            return row[col_pago]
-        elif row['status'] == 'PARTIAL':
-            return row[col_pago] + row[col_aberto]
-        else:
-            return row[col_aberto]
-
-    df_consolidado['Valor Calculado'] = df_consolidado.apply(calcular_valor, axis=1)
-    print(f"  ✅ Coluna 'Valor Calculado' criada com sucesso!")
 
 # ===================== Converter colunas datetime para string =====================
 print(f"\n🔄 Convertendo colunas de data para string...")
@@ -124,12 +127,12 @@ for col in datetime_columns:
 print(f"\n🔄 Renomeando colunas...")
 
 colunas_renomear = {
-    "Data de vencimento": "dueDate",
+    "Data original de vencimento": "dueDate",
     "Data de competência": "financialEvent.competenceDate",
-    "Valor Calculado": "paid",
+    "Valor (R$)": "paid",
     "Categoria 1": "categoriesRatio.category",
     "Descrição": "description",
-    "Nome do fornecedor": "financialEvent.negotiator.name",
+    "Nome do fornecedor/cliente": "financialEvent.negotiator.name",
     "Data do último pagamento": "lastAcquittanceDate"
 }
 
@@ -176,7 +179,7 @@ sheets_service.spreadsheets().values().update(
 print(f"\n✅ Planilha Google '{sheet_name}' atualizada com sucesso!")
 print(f"📊 Total de registros: {len(df_consolidado)}")
 print(f"📊 Registros por status (após ajustes):")
-for status in status_list + ['OVERDUE']:
+for status in ['ACQUITTED', 'PARTIAL', 'PENDING', 'LOST', 'RENEGOTIATED', 'OVERDUE']:
     count = len(df_consolidado[df_consolidado['status'] == status])
     if count > 0:
         print(f"  - {status}: {count} registros")
